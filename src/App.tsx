@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { HashRouter, Routes, Route } from 'react-router-dom';
 import { StoreProvider } from './hooks/useStore';
 import { useTheme } from './hooks/useTheme';
 import Layout from './components/Layout';
@@ -16,7 +16,7 @@ export default function App() {
   return (
     <StoreProvider>
       <ThemeWrapper>
-        <BrowserRouter>
+        <HashRouter>
           <Routes>
             <Route element={<Layout />}>
               <Route path="/" element={<Dashboard />} />
@@ -25,7 +25,7 @@ export default function App() {
               <Route path="/settings" element={<Settings />} />
             </Route>
           </Routes>
-        </BrowserRouter>
+        </HashRouter>
       </ThemeWrapper>
     </StoreProvider>
   );
