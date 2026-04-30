@@ -3,9 +3,13 @@ import { NavLink, Outlet } from 'react-router-dom';
 const navItems = [
   { to: '/', label: 'Today', icon: '◉' },
   { to: '/weekly', label: 'Weekly', icon: '▦' },
+  { to: '/journal', label: 'Journal', icon: '✎' },
   { to: '/projects', label: 'Projects', icon: '◫' },
+  { to: '/recurring', label: 'Repeat', icon: '🔄' },
   { to: '/settings', label: 'Settings', icon: '⚙' },
 ];
+
+const mobileNav = navItems.slice(0, 5);
 
 function NavItem({ to, label, icon }: { to: string; label: string; icon: string }) {
   return (
@@ -49,7 +53,7 @@ export default function Layout() {
 
       {/* Bottom nav (mobile) */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 flex justify-around items-center h-16 bg-[var(--color-surface)] border-t border-[var(--color-border)] z-50">
-        {navItems.map(item => (
+        {mobileNav.map(item => (
           <NavLink
             key={item.to}
             to={item.to}

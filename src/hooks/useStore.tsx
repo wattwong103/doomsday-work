@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
-import type { AppData, Task, Project, WeeklyGoal, AppSettings } from '../types';
+import type { AppData, Task, Project, WeeklyGoal, AppSettings, JournalEntry, RecurringTask, Priority } from '../types';
 import * as store from '../lib/store';
 import { syncWithDropbox } from '../lib/dropbox';
 import { generateId, todayStr, randomColor } from '../lib/utils';
@@ -7,10 +7,11 @@ import { generateId, todayStr, randomColor } from '../lib/utils';
 interface StoreContextType {
   data: AppData;
   // Tasks
-  addTask: (title: string, projectId?: string | null, date?: string) => void;
+  addTask: (title: string, projectId?: string | null, date?: string, priority?: Priority, tags?: string[]) => void;
   updateTask: (id: string, updates: Partial<Task>) => void;
   deleteTask: (id: string) => void;
   toggleTask: (id: string) => void;
+  reorderTasks: (date: string, orderedIds: string[]) => void;
   // Projects
   addProject: (name: string, description?: string, color?: string) => void;
   updateProject: (id: string, updates: Partial<Project>) => void;
@@ -20,6 +21,16 @@ interface StoreContextType {
   updateWeeklyGoal: (id: string, updates: Partial<WeeklyGoal>) => void;
   deleteWeeklyGoal: (id: string) => void;
   toggleWeeklyGoal: (id: string) => void;
+  // Journal
+  saveJournal: (date: string, done: string, blockers: string, plan: string) => void;
+  // Recurring tasks
+  addRecurringTask: (title: string, frequency: RecurringTask['frequency'], projectId?: string | null, priority?: Priority, tags?: string[], dayOfWeek?: number) => void;
+  updateRecurringTask: (id: string, updates: Partial<RecurringTask>) => void;
+  deleteRecurringTask: (id: string) => void;
+  spawnRecurringTasks: (date?: string) => void;
+  // Tags
+  addTag: (tag: string) => void;
+  deleteTag: (tag: string) => void;
   // Settings & sync
   updateSettings: (updates: Partial<AppSettings>) => void;
   exportData: () => void;
@@ -42,7 +53,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  // Auto-sync with Dropbox on data change (debounced)
   useEffect(() => {
     if (!data.settings.dropboxToken) return;
     const timer = setTimeout(() => {
@@ -51,7 +61,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => clearTimeout(timer);
   }, [data]);
 
-  const addTask = useCallback((title: string, projectId: string | null = null, date?: string) => {
+  // Spawn recurring tasks on mount
+  useEffect(() => {
+    spawnRecurringTasks();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const addTask = useCallback((title: string, projectId: string | null = null, date?: string, priority: Priority = 'none', tags: string[] = []) => {
     const task: Task = {
       id: generateId(),
       title,
@@ -59,6 +75,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       projectId,
       date: date || todayStr(),
       notes: '',
+      priority,
+      tags,
+      sortOrder: Date.now(),
       createdAt: new Date().toISOString(),
       completedAt: null,
     };
@@ -83,6 +102,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         completedAt: newStatus === 'done' ? new Date().toISOString() : null,
       });
     });
+  }, [persist]);
+
+  const reorderTasks = useCallback((date: string, orderedIds: string[]) => {
+    persist(d => store.reorderTasks(d, date, orderedIds));
   }, [persist]);
 
   const addProject = useCallback((name: string, description = '', color?: string) => {
@@ -125,6 +148,96 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     });
   }, [persist]);
 
+  const saveJournal = useCallback((date: string, done: string, blockers: string, plan: string) => {
+    const entry: JournalEntry = {
+      id: generateId(),
+      date,
+      done,
+      blockers,
+      plan,
+      createdAt: new Date().toISOString(),
+    };
+    persist(d => store.upsertJournal(d, entry));
+  }, [persist]);
+
+  const addRecurringTask = useCallback((
+    title: string,
+    frequency: RecurringTask['frequency'],
+    projectId: string | null = null,
+    priority: Priority = 'none',
+    tags: string[] = [],
+    dayOfWeek?: number,
+  ) => {
+    const rt: RecurringTask = {
+      id: generateId(),
+      title,
+      projectId,
+      priority,
+      tags,
+      frequency,
+      dayOfWeek,
+      active: true,
+      createdAt: new Date().toISOString(),
+    };
+    persist(d => store.addRecurringTask(d, rt));
+  }, [persist]);
+
+  const updateRecurringTask = useCallback((id: string, updates: Partial<RecurringTask>) => {
+    persist(d => store.updateRecurringTask(d, id, updates));
+  }, [persist]);
+
+  const deleteRecurringTask = useCallback((id: string) => {
+    persist(d => store.deleteRecurringTask(d, id));
+  }, [persist]);
+
+  const spawnRecurringTasks = useCallback((date?: string) => {
+    const today = date || todayStr();
+    const dayOfWeek = new Date(today + 'T12:00:00').getDay();
+    const isWeekday = dayOfWeek >= 1 && dayOfWeek <= 5;
+
+    persist(d => {
+      let updated = d;
+      for (const rt of d.recurringTasks) {
+        if (!rt.active) continue;
+        const alreadyExists = d.tasks.some(
+          t => t.title === rt.title && t.date === today && t.projectId === rt.projectId
+        );
+        if (alreadyExists) continue;
+
+        let shouldSpawn = false;
+        if (rt.frequency === 'daily') shouldSpawn = true;
+        else if (rt.frequency === 'weekdays') shouldSpawn = isWeekday;
+        else if (rt.frequency === 'weekly') shouldSpawn = dayOfWeek === (rt.dayOfWeek ?? 1);
+
+        if (shouldSpawn) {
+          const task: Task = {
+            id: generateId(),
+            title: rt.title,
+            status: 'todo',
+            projectId: rt.projectId,
+            date: today,
+            notes: '',
+            priority: rt.priority,
+            tags: [...rt.tags],
+            sortOrder: Date.now(),
+            createdAt: new Date().toISOString(),
+            completedAt: null,
+          };
+          updated = store.addTask(updated, task);
+        }
+      }
+      return updated;
+    });
+  }, [persist]);
+
+  const addTag = useCallback((tag: string) => {
+    persist(d => store.addTag(d, tag));
+  }, [persist]);
+
+  const deleteTag = useCallback((tag: string) => {
+    persist(d => store.deleteTag(d, tag));
+  }, [persist]);
+
   const updateSettings = useCallback((updates: Partial<AppSettings>) => {
     persist(d => store.updateSettings(d, updates));
   }, [persist]);
@@ -164,9 +277,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   return (
     <StoreContext.Provider
       value={{
-        data, addTask, updateTask, deleteTask, toggleTask,
+        data, addTask, updateTask, deleteTask, toggleTask, reorderTasks,
         addProject, updateProject, deleteProject,
         addWeeklyGoal, updateWeeklyGoal, deleteWeeklyGoal, toggleWeeklyGoal,
+        saveJournal,
+        addRecurringTask, updateRecurringTask, deleteRecurringTask, spawnRecurringTasks,
+        addTag, deleteTag,
         updateSettings, exportData, importData, triggerSync, syncing,
       }}
     >
